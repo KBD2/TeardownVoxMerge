@@ -1,18 +1,21 @@
 from typing import Self
 
 """
-Tools for reading MagicaVoxel Vox files.
+Tools for working with MagicaVoxel Vox files.
 NOT COMPATIBLE WITH EVERY VERSION!
 Doesn't currently support animated vox files.
+Makes assumptions about the file, e.g. there being only one group node chunk per file,
+as MV doesn't seem to fully use these features (yet), and it makes building the scene
+tree *significantly* easier.
 Also - slightly scuffed code, going for fast MVP here
 """
-
 
 class VoxChunk:
     def __init__(this, parent=None):
         this.parent = parent
 
     def read(this, data: bytes, cursor: int) -> int:
+
         numChildren = 0
 
         this.children: list[VoxChunk] = []
@@ -73,15 +76,18 @@ class VoxChunk:
         pass
 
     def parseInt(this, cursor: int = 0) -> (int, int):
+        # 4 bytes, little-endian
         if cursor == 0:
             return int(this._data[3::-1].hex(), 16), cursor + 4
         return int(this._data[cursor + 3 : cursor - 1 : -1].hex(), 16), cursor + 4
     
     def parseString(this, cursor: int) -> (str, int):
+        # 4 bytes for string length then n bytes for unterminated string
         size, cursor = this.parseInt(cursor)
         return this._data[cursor : cursor + size].decode(), cursor + size
     
     def parseDict(this, cursor: int) -> (dict, int):
+        # 4 bytes for number of entries then n string key-value pairs
         ret = {}
         numEntries, cursor = this.parseInt(cursor)
         for _ in range(numEntries):
@@ -105,20 +111,16 @@ class VoxChunk:
             ret += this.buildString(k) + this.buildString(v)
         return ret
     
-    def serialise(this) -> bytes:
-        childData = bytes()
-        #for child in this.children:
-        #    childData += child.serialise()
-
+    # Right now, only the main chunk has child chunks, and we manually write that anyway
+    # So we only ever need to treat chunks we serialise as having no children
+    def serialiseShallow(this) -> bytes:
         ret = bytes()
         ret += this.name[:].encode('utf-8')
 
         ret += this.contentSize.to_bytes(4, 'little')
-        ret += len(childData).to_bytes(4, 'little')
+        ret += bytearray([0, 0, 0, 0])
 
         ret += this._data
-
-        ret += childData
 
         return ret
     
@@ -136,7 +138,7 @@ class TransformNodeChunk(VoxChunk):
         this.layerId, cursor = this.parseInt(cursor + 4)
         this.transform, cursor = this.parseDict(cursor + 4)
 
-    def serialise(this) -> bytes:
+    def serialiseShallow(this) -> bytes:
         content = this.buildInt(this.nodeId)
         content += this.buildDict(this.attributes)
         content += this.buildInt(this.childNodeId)
@@ -161,7 +163,7 @@ class ShapeNodeChunk(VoxChunk):
         this.modelId, cursor = this.parseInt(cursor)
         this.modelAttributes, cursor = this.parseDict(cursor)
     
-    def serialise(this) -> bytes:
+    def serialiseShallow(this) -> bytes:
 
         content = this.buildInt(this.nodeId)
         content += this.buildDict(this.attributes)
@@ -216,7 +218,7 @@ class GroupNodeChunk(VoxChunk):
 
         this._data = []
 
-    def serialise(this) -> bytes:
+    def serialiseShallow(this) -> bytes:
         content = this.buildInt(this.nodeId)
         content += this.buildDict(this.attributes)
         content += this.buildInt(len(this.childIDs))
@@ -310,30 +312,35 @@ class VoxFile:
 
         contentChunksData = bytes()
 
+        # Size and index chunks are written interlaced
         for s, i in zip(this.sizeChunks(), this.indexChunks()):
-            contentChunksData += s.serialise()
-            contentChunksData += i.serialise()
+            contentChunksData += s.serialiseShallow()
+            contentChunksData += i.serialiseShallow()
 
-        contentChunksData += this.transformNodeChunks()[0].serialise()
-        contentChunksData += this.groupNodeChunk.serialise()
+        # We then write the first transform node and its child group node
+        contentChunksData += this.transformNodeChunks()[0].serialiseShallow()
+        contentChunksData += this.groupNodeChunk.serialiseShallow()
 
+        # Then the shape transforms and their node data are written interlaced
         for t, s in zip(this.transformNodeChunks()[1:], this.shapeNodeChunks()):
-            contentChunksData += t.serialise()
-            contentChunksData += s.serialise()
+            contentChunksData += t.serialiseShallow()
+            contentChunksData += s.serialiseShallow()
 
+        # Then we dump everything else in
         for chunk in this.materialChunks():
-            contentChunksData += chunk.serialise()
+            contentChunksData += chunk.serialiseShallow()
         for chunk in this.layerChunks():
-            contentChunksData += chunk.serialise()
+            contentChunksData += chunk.serialiseShallow()
         for chunk in this.renderObjectChunks():
-            contentChunksData += chunk.serialise()
+            contentChunksData += chunk.serialiseShallow()
         for chunk in this.renderCameraChunks():
-            contentChunksData += chunk.serialise()
+            contentChunksData += chunk.serialiseShallow()
         for chunk in this.noteChunks():
-            contentChunksData += chunk.serialise()
+            contentChunksData += chunk.serialiseShallow()
             
-        contentChunksData += this.paletteChunk.serialise()
+        contentChunksData += this.paletteChunk.serialiseShallow()
 
+        # We can now add the child content size to the main chunk
         mainChunkData += bytearray(len(contentChunksData).to_bytes(4, 'little'))
 
         with open(fileName, "wb") as file:
