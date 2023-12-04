@@ -9,6 +9,10 @@ Makes assumptions about the file, e.g. there being only one group node chunk per
 as MV doesn't seem to fully use these features (yet), and it makes building the scene
 tree *significantly* easier.
 Also - slightly scuffed code, going for fast MVP here
+
+Vox format references:
+- https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox.txt
+- https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox-extension.txt
 """
 
 MAT_BOUNDARIES = [
@@ -188,6 +192,7 @@ class TransformNodeChunk(VoxChunk):
 
         return ret
 
+# NOT THE VOXEL DATA CHUNK! That's ShapeIndexesChunk - this contains scene graph data.
 class ShapeNodeChunk(VoxChunk):
     def parseChunkData(this):
         this.nodeId, cursor = this.parseInt(0x0)
@@ -328,6 +333,8 @@ class VoxFile:
 
             print("Read", numChildren, "chunks\n")
 
+            # Yeah this is probably bad practise but I just wanted to get the script working
+
             this.sizeChunks = lambda: this.mainChunk.filterChildren("SIZE")
             this.indexChunks = lambda: this.mainChunk.filterChildren("XYZI")
 
@@ -381,6 +388,8 @@ class VoxFile:
                     inUse[index - 1] = True
                     break
             if not found:
+                # Find the closest colour using the Euclidian distance formula and create a mapping for it.
+                # We don't copy the palette over here as we assume the main vox file has priority.
                 minDifference = 1e99
                 minIndex = 0
                 for index in range(section[0], section[1]):
@@ -391,20 +400,25 @@ class VoxFile:
                 mappings.append((colour, minIndex - 1))
                 inUse[index - 1] = True
 
-        # Go through the shape indices and apply the approproate mapping
+        # Go through the shape indices and apply the appropriate mapping
         for index in shape.indexesChunk.indices:
             for mapping in mappings:
                 if index[3] - 1 == mapping[0]:
                     index[3] = mapping[1] + 1
                     break
 
+        
         highestId = this.shapeNodeChunks()[-1].nodeId
 
+        # Adding a new shape is currently as easy as adding a transform and shape node, with IDs one and two
+        # higher than the last shape node.
         shape.transformChunk.nodeId = highestId + 1
         shape.transformChunk.childNodeId = highestId + 2
         shape.shapeChunk.nodeId = highestId + 2
         shape.shapeChunk.modelId = len(this.mainChunk.filterChildren("nSHP"))
 
+        # We can then just append all the chunks to the main chunk's children, as they'll be written in the
+        # appropriate order anyway.
         this.mainChunk.children.append(shape.transformChunk)
         this.mainChunk.children.append(shape.shapeChunk)
         this.mainChunk.children.append(shape.sizeChunk)

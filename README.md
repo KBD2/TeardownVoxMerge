@@ -6,3 +6,7 @@ The tool attempts to copy colours and remap incoming shapes to preserve the shap
 `python voxmerge.py path_to_main_vox [path_to_merging_vox...]`
 
 The tool will output `output.vox` containing the merged vox files. The tool will preserve the non-shape data in the main vox file, but any non-shape-related data in the merging files will not be kept.
+
+#### References for the .vox file format:
+- [Base format](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox.txt)
+- [Extensions](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox-extension.txt)
