@@ -1,3 +1,4 @@
+import math
 from typing import Self
 
 """
@@ -9,6 +10,38 @@ as MV doesn't seem to fully use these features (yet), and it makes building the 
 tree *significantly* easier.
 Also - slightly scuffed code, going for fast MVP here
 """
+
+MAT_BOUNDARIES = [
+    (1, 8), # Glass
+    (9, 24), # Grass
+    (25, 40), # Dirt
+    (41, 56), # Rock
+    (57, 72), # Wood
+    (73, 88), # Concrete
+    (89, 104), # Brick
+    (105, 120), # Plaster
+    (121, 136), # Weak metal
+    (137, 152), # Heavy metal
+    (153, 168), # Plastic
+    (169, 224), # Reserved
+    (225, 240), # Unphysical
+    (241, 255) # Reserved
+]
+
+def rgbDifference(a: int, b: int):
+    colourA = [
+                (a) & 0xff,
+                (a >> 8) & 0xff,
+                (a >> 16) & 0xff,
+                (a >> 24)
+    ]
+    colourB = [
+                (b) & 0xff,
+                (b >> 8) & 0xff,
+                (b >> 16) & 0xff,
+                (b >> 24)
+    ]
+    return math.sqrt(math.pow(colourA[0] - colourB[0], 2) + math.pow(colourA[1] - colourB[1], 2) + math.pow(colourA[2] - colourB[2], 2) + math.pow(colourA[3] - colourB[3], 2))
 
 class VoxChunk:
     def __init__(this, parent=None):
@@ -184,11 +217,42 @@ class PaletteChunk(VoxChunk):
         this.palette = []
         cursor = 0
         for cursor in range(0, len(this._data), 4):
-            this.palette.append(int(this._data[cursor : cursor + 3].hex(), 16))
+            this.palette.append(this.parseInt(cursor)[0])
+    
+    def serialiseShallow(this) -> bytes:
+        ret = bytes("RGBA", 'utf-8')
+        ret += this.buildInt(1024) + this.buildInt(0)
+        for colour in this.palette:
+            ret += this.buildInt(colour)
+            
+        return ret
 
 class ShapeIndexesChunk(VoxChunk):
     def parseChunkData(this):
-        pass
+        this.numVoxels, cursor = this.parseInt()
+        this.indices = []
+        for _ in range(this.numVoxels):
+            packed, cursor = this.parseInt(cursor)
+            this.indices.append([
+                (packed) & 0xff,
+                (packed >> 8) & 0xff,
+                (packed >> 16) & 0xff,
+                (packed >> 24)
+            ])
+    
+    def serialiseShallow(this) -> bytes:
+        ret = bytes("XYZI", 'utf-8')
+
+        content = this.buildInt(this.numVoxels)
+
+        for index in this.indices:
+            content += bytearray([index[0], index[1], index[2], index[3]])
+
+        ret += this.buildInt(len(content))
+        ret += this.buildInt(0)
+        ret += content
+        
+        return ret
 
 class RenderCameraChunk(VoxChunk):
     def parseChunkData(this):
@@ -226,6 +290,7 @@ class GroupNodeChunk(VoxChunk):
             content += this.buildInt(id)
         
         ret = bytes("nGRP", 'utf-8')
+        
         ret += len(content).to_bytes(4, 'little')
         ret += bytearray([0, 0, 0, 0])
 
@@ -238,11 +303,12 @@ class NoteChunk(VoxChunk):
         pass
 
 class VoxShape:
-    def __init__(this, transform: TransformNodeChunk, size: SizeChunk, shape: ShapeNodeChunk, indexes: ShapeIndexesChunk):
+    def __init__(this, transform: TransformNodeChunk, size: SizeChunk, shape: ShapeNodeChunk, indexes: ShapeIndexesChunk, palette: PaletteChunk):
         this.transformChunk = transform
         this.sizeChunk = size
         this.shapeChunk = shape
         this.indexesChunk = indexes
+        this.paletteChunk = palette
     
 class VoxFile:
     def __init__(this, fileName: str):
@@ -286,9 +352,52 @@ class VoxFile:
                 transformId = model[2].nodeId - 1
                 for chunk in this.transformNodeChunks():
                     if chunk.nodeId == transformId:
-                        this.shapes.append(VoxShape(chunk, model[0], model[2], model[1]))
+                        this.shapes.append(VoxShape(chunk, model[0], model[2], model[1], this.paletteChunk))
 
+    """NOTE:
+        A colour index in the palette is equal to the shape index - 1
+    """
     def mergeShape(this, shape: VoxShape):
+        inUse = [False] * 255
+        for chunk in this.indexChunks():
+            for index in chunk.indices:
+                inUse[index[3] - 1] = True
+
+        # Create a set of the colours we need to remap 
+        toMerge = set()
+        for index in shape.indexesChunk.indices:
+            toMerge.add(index[3] - 1)
+        
+        # Try to remap each colour to a free spot in the appropriate section, and find the closest colour if we can't
+        mappings = []
+        for colour in toMerge:
+            section = list(filter(lambda x: colour >= x[0] - 1 and colour <= x[1] - 1, MAT_BOUNDARIES))[0]
+            found = False
+            for index in range(section[0], section[1]):
+                if not inUse[index - 1]:
+                    found = True
+                    mappings.append((colour, index - 1))
+                    this.paletteChunk.palette[index - 1] = shape.paletteChunk.palette[colour]
+                    inUse[index - 1] = True
+                    break
+            if not found:
+                minDifference = 1e99
+                minIndex = 0
+                for index in range(section[0], section[1]):
+                    diff = rgbDifference(this.paletteChunk.palette[index - 1], shape.paletteChunk.palette[colour])
+                    if diff < minDifference:
+                        minDifference = diff
+                        minIndex = index
+                mappings.append((colour, minIndex - 1))
+                inUse[index - 1] = True
+
+        # Go through the shape indices and apply the approproate mapping
+        for index in shape.indexesChunk.indices:
+            for mapping in mappings:
+                if index[3] - 1 == mapping[0]:
+                    index[3] = mapping[1] + 1
+                    break
+
         highestId = this.shapeNodeChunks()[-1].nodeId
 
         shape.transformChunk.nodeId = highestId + 1
