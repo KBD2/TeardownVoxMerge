@@ -9,4 +9,6 @@ The tool will output `output.vox` containing the merged vox files. The tool will
 
 #### References for the .vox file format:
 - [Base format](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox.txt)
-- [Extensions](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox-extension.txt)
+- [Extensions](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox-extension.txt)  
+
+Note: Doesn't currently support vox files that use animation frames.
