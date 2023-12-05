@@ -364,7 +364,7 @@ class VoxFile:
     """NOTE:
         A colour index in the palette is equal to the shape index - 1
     """
-    def mergeShape(this, shape: VoxShape):
+    def mergeShape(this, shape: VoxShape, dontPreserve=False):
         inUse = [False] * 255
         for chunk in this.indexChunks():
             for index in chunk.indices:
@@ -380,7 +380,11 @@ class VoxFile:
         for colour in toMerge:
             section = list(filter(lambda x: colour >= x[0] - 1 and colour <= x[1] - 1, MAT_BOUNDARIES))[0]
             found = False
-            for index in range(section[0], section[1]):
+            if not dontPreserve:
+                bounds = range(section[0], section[1])
+            else:
+                bounds = range(1, 255)
+            for index in bounds:
                 if not inUse[index - 1]:
                     found = True
                     mappings.append((colour, index - 1))
@@ -392,7 +396,7 @@ class VoxFile:
                 # We don't copy the palette over here as we assume the main vox file has priority.
                 minDifference = 1e99
                 minIndex = 0
-                for index in range(section[0], section[1]):
+                for index in bounds:
                     diff = rgbDifference(this.paletteChunk.palette[index - 1], shape.paletteChunk.palette[colour])
                     if diff < minDifference:
                         minDifference = diff
@@ -426,9 +430,9 @@ class VoxFile:
 
         this.groupNodeChunk.childIDs.append(highestId + 1)
 
-    def merge(this, vox: Self):
+    def merge(this, vox: Self, dontPreserve=False):
         for shape in vox.shapes:
-            this.mergeShape(shape)
+            this.mergeShape(shape, dontPreserve)
     
     def write(this, fileName: str):
         mainChunkData = bytes("MAIN", 'utf-8') + bytearray((0).to_bytes(4, 'little'))
